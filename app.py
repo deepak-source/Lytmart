@@ -2,6 +2,7 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 import requests
 import datetime
+import pandas as pd
 
 # Sidebar Navigation
 with st.sidebar:
@@ -27,27 +28,34 @@ import datetime
 if selected == "Sales Report":
     st.title("📊 Sales Report")
 
-    # Row 1: Dates
-    col1, col2 = st.columns(2)
+    # Row 1: Dates and Location Filter
+    col1, col2, col3 = st.columns(3)
     from_date = col1.date_input("From Date", datetime.date(2025, 2, 22))
     to_date = col2.date_input("To Date", datetime.date(2025, 2, 23))
 
+    # Location Filter
+    location_data = post_api("/api/getrows", {
+        "oid": OID, "sid": SID, "type": "location", "name": "", "maxrows": "50"
+    })
+    location_list = {l['name']: l['id'] for l in location_data['items']}
+    selected_location = col3.selectbox("Location", ["All"] + list(location_list.keys()))
+
     # Row 2: Salesman and Account
-    col3, col4 = st.columns(2)
+    col4, col5 = st.columns(2)
 
     # Salesman Filter
     salesman_data = post_api("/api/getrows", {
         "oid": OID, "sid": SID, "type": "salesman", "name": "", "maxrows": "50"
     })
     salesman_list = {s['name']: s['id'] for s in salesman_data['items']}
-    selected_salesman = col3.selectbox("Salesman", ["All"] + list(salesman_list.keys()))
+    selected_salesman = col4.selectbox("Salesman", ["All"] + list(salesman_list.keys()))
 
     # Account Filter
     customer_data = post_api("/api/getrows", {
         "oid": OID, "sid": SID, "type": "customer", "name": "", "maxrows": "50"
     })
     account_list = {c['name']: c['id'] for c in customer_data['items']}
-    selected_account = col4.selectbox("Account", ["All"] + list(account_list.keys()))
+    selected_account = col5.selectbox("Account", ["All"] + list(account_list.keys()))
 
     if st.button("Get Report"):
         payload = {
@@ -55,7 +63,7 @@ if selected == "Sales Report":
             "sid": SID,
             "from": from_date.strftime('%Y-%m-%d'),
             "to": to_date.strftime('%Y-%m-%d'),
-            "location": "1",
+            "location": location_list.get(selected_location, "0") if selected_location != "All" else "0",
             "document": "7",
             "account": account_list.get(selected_account, "0") if selected_account != "All" else "0",
             "salesman": salesman_list.get(selected_salesman, "0") if selected_salesman != "All" else "0",
@@ -69,10 +77,36 @@ if selected == "Sales Report":
 
         if result['status'] == "success":
             lines = result.get('lines', [])
-            total_sales = sum(float(row['amount']) for row in lines)
-            total_invoices = len(lines)
 
-            # 🎯 Cards for Metrics
+            # Keep only specific columns
+            filtered_data = [
+                {
+                    "date": row["date"],
+                    "number": row["number"],
+                    "location": row["location"],
+                    "account": row["account"],
+                    "subaccount": row["subaccount"],
+                    "name": row["name"],
+                    "amount": float(row["amount"]),
+                    "addressa": row["addressa"],
+                    "addressb": row["addressb"],
+                    "State": row["state"],
+                    "Country": row["country"],
+                    "Mobile": row["mobile"],
+                    "tin": row["tin"],
+                } for row in lines
+            ]
+
+            df = pd.DataFrame(filtered_data)
+            df["date"] = pd.to_datetime(df["date"], format="%d-%m-%Y", errors="coerce")
+            df["month"] = df["date"].dt.strftime("%Y-%m")
+            df["date"] = df["date"].dt.strftime("%d-%m-%Y")
+
+
+            total_sales = df["amount"].sum()
+            total_invoices = len(df)
+
+            # 🎯 Stylish Metric Cards
             card_style = """
                 <style>
                 .metric-card {
@@ -97,27 +131,35 @@ if selected == "Sales Report":
             """
             st.markdown(card_style, unsafe_allow_html=True)
 
-            col1, col2 = st.columns(2)
-            with col1:
+            col_metrics1, col_metrics2 = st.columns(2)
+            with col_metrics1:
                 st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-header">Total Sales</div>
-                    <div class="metric-value">₹ {total_sales:,.2f}</div>
-                </div>
+                    <div class="metric-card">
+                        <div class="metric-header">Total Sales</div>
+                        <div class="metric-value">₹ {total_sales:,.2f}</div>
+                    </div>
                 """, unsafe_allow_html=True)
 
-            with col2:
+            with col_metrics2:
                 st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-header">Total Invoices</div>
-                    <div class="metric-value">{total_invoices}</div>
-                </div>
+                    <div class="metric-card">
+                        <div class="metric-header">Total Invoices</div>
+                        <div class="metric-value">{total_invoices}</div>
+                    </div>
                 """, unsafe_allow_html=True)
 
+            # 📊 Month-wise Bar Chart
+            st.subheader("📅 Monthly Sales Overview")
+            monthwise_sales = df.groupby("month")["amount"].sum().sort_index()
+            st.bar_chart(monthwise_sales)
+
+            # 📋 Data Table
             st.success(f"Found {total_invoices} record(s)")
-            st.dataframe(lines)
+            st.dataframe(df)
+
         else:
             st.error("Failed to fetch data.")
+
 
 
 #page2
